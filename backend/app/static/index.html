@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PDF Cracker</title>
+  <title>Document Password Audit</title>
   <style>
     :root {
       color-scheme: light;
@@ -184,8 +184,9 @@
       font-size: 0.9rem;
     }
 
-    select,
-    input[type="number"] {
+select,
+input[type="number"],
+input[type="text"] {
       width: 100%;
       min-height: 44px;
       border: 1px solid var(--line);
@@ -349,8 +350,8 @@
   <div class="shell">
     <header>
       <div>
-        <h1>PDF Cracker</h1>
-        <p class="subtitle">Envie um PDF protegido por senha, escolha a lista de palavras e acompanhe o resultado do processamento.</p>
+        <h1>Document Password Audit</h1>
+        <p class="subtitle">Envie um arquivo protegido por senha, escolha a engine e acompanhe o resultado do processamento.</p>
       </div>
       <div class="api-pill" id="apiStatus">API local: verificando...</div>
     </header>
@@ -361,10 +362,10 @@
           <h2 class="section-title">Novo processamento</h2>
           <form id="crackForm">
             <div class="dropzone" id="dropzone">
-              <input id="pdfFile" name="file" type="file" accept="application/pdf,.pdf" required>
+              <input id="auditFile" name="file" type="file" accept="application/pdf,.pdf" required>
               <div class="drop-content">
                 <div class="upload-icon">↑</div>
-                <p class="drop-title">Selecione ou arraste o PDF</p>
+                <p class="drop-title">Selecione ou arraste o arquivo</p>
                 <p class="drop-copy">O arquivo é usado apenas para extrair o hash e depois é removido.</p>
                 <div class="file-name" id="fileName"></div>
               </div>
@@ -372,12 +373,22 @@
 
             <div class="grid">
               <div>
+                <label for="fileType">Formato</label>
+                <select id="fileType" name="file_type">
+                  <option value="pdf" data-accept="application/pdf,.pdf" data-hashcat-mode="10500">PDF</option>
+                  <option value="zip" data-accept=".zip,application/zip,application/x-zip-compressed" data-hashcat-mode="17210">ZIP</option>
+                </select>
+              </div>
+              <div>
                 <label for="engine">Engine</label>
                 <select id="engine" name="engine">
                   <option value="john">John the Ripper</option>
                   <option value="hashcat">Hashcat</option>
                 </select>
               </div>
+            </div>
+
+            <div class="grid">
               <div id="wordlistField">
                 <label for="wordlist">Wordlist</label>
                 <select id="wordlist" name="wordlist_id">
@@ -397,6 +408,7 @@
                 <select id="hashcatAttack" name="hashcat_attack">
                   <option value="wordlist">Wordlist</option>
                   <option value="bruteforce">Brute force</option>
+                  <option value="bruteforce_range">Numérico por intervalo</option>
                 </select>
               </div>
             </div>
@@ -405,6 +417,18 @@
               <div>
                 <label for="hashcatMask">Máscara</label>
                 <input id="hashcatMask" name="hashcat_mask" type="text" value="?d?d?d?d?d?d" placeholder="?d?d?d?d?d?d">
+              </div>
+            </div>
+
+            <div class="grid hidden" id="hashcatRangeOptions">
+              <div>
+                <label for="hashcatMinLength">Mínimo</label>
+                <input id="hashcatMinLength" name="hashcat_min_length" type="number" min="1" max="12" value="4">
+              </div>
+              <div>
+                <label for="hashcatMaxLength">Máximo</label>
+                <input id="hashcatMaxLength" name="hashcat_max_length" type="number" min="1" max="12" value="8">
+                <input id="hashcatCharset" name="hashcat_charset" type="hidden" value="?d">
               </div>
             </div>
 
@@ -442,7 +466,8 @@
 
   <script>
     const form = document.querySelector("#crackForm");
-    const fileInput = document.querySelector("#pdfFile");
+    const fileInput = document.querySelector("#auditFile");
+    const fileType = document.querySelector("#fileType");
     const fileName = document.querySelector("#fileName");
     const dropzone = document.querySelector("#dropzone");
     const engine = document.querySelector("#engine");
@@ -451,6 +476,9 @@
     const hashcatAttack = document.querySelector("#hashcatAttack");
     const hashcatMaskOptions = document.querySelector("#hashcatMaskOptions");
     const hashcatMask = document.querySelector("#hashcatMask");
+    const hashcatRangeOptions = document.querySelector("#hashcatRangeOptions");
+    const hashcatMinLength = document.querySelector("#hashcatMinLength");
+    const hashcatMaxLength = document.querySelector("#hashcatMaxLength");
     const wordlistField = document.querySelector("#wordlistField");
     const wordlist = document.querySelector("#wordlist");
     const submitButton = document.querySelector("#submitButton");
@@ -463,7 +491,7 @@
 
     const API = {
       health: "/",
-      crackPdf: "/api/v1/crack/pdf",
+      crackFile: "/api/v1/crack/file",
       status: (id) => `/api/v1/crack/status/${encodeURIComponent(id)}`
     };
 
@@ -510,13 +538,24 @@
     function syncHashcatControls() {
       const isHashcat = engine.value === "hashcat";
       const usesMask = isHashcat && hashcatAttack.value === "bruteforce";
+      const usesRange = isHashcat && hashcatAttack.value === "bruteforce_range";
 
       hashcatOptions.classList.toggle("hidden", !isHashcat);
       hashcatMaskOptions.classList.toggle("hidden", !usesMask);
-      wordlistField.classList.toggle("hidden", usesMask);
+      hashcatRangeOptions.classList.toggle("hidden", !usesRange);
+      wordlistField.classList.toggle("hidden", usesMask || usesRange);
       hashcatMode.required = isHashcat;
       hashcatMask.required = usesMask;
-      wordlist.disabled = usesMask;
+      hashcatMinLength.required = usesRange;
+      hashcatMaxLength.required = usesRange;
+      wordlist.disabled = usesMask || usesRange;
+    }
+
+    function syncFileTypeControls() {
+      const selected = fileType.selectedOptions[0];
+      fileInput.accept = selected.dataset.accept;
+      hashcatMode.value = selected.dataset.hashcatMode;
+      fileName.textContent = fileInput.files[0]?.name || "";
     }
 
     async function pollStatus(id) {
@@ -602,13 +641,17 @@
       syncHashcatControls();
     });
 
+    fileType.addEventListener("change", () => {
+      syncFileTypeControls();
+    });
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       stopPolling();
       setMessage("");
 
       if (!fileInput.files.length) {
-        setMessage("Selecione um PDF antes de iniciar.", "error");
+        setMessage("Selecione um arquivo antes de iniciar.", "error");
         return;
       }
 
@@ -617,13 +660,22 @@
         body.delete("hashcat_mode");
         body.delete("hashcat_attack");
         body.delete("hashcat_mask");
+        body.delete("hashcat_charset");
+        body.delete("hashcat_min_length");
+        body.delete("hashcat_max_length");
       }
 
       if (engine.value === "hashcat" && hashcatAttack.value !== "bruteforce") {
         body.delete("hashcat_mask");
       }
 
-      if (engine.value === "hashcat" && hashcatAttack.value === "bruteforce") {
+      if (engine.value === "hashcat" && hashcatAttack.value !== "bruteforce_range") {
+        body.delete("hashcat_charset");
+        body.delete("hashcat_min_length");
+        body.delete("hashcat_max_length");
+      }
+
+      if (engine.value === "hashcat" && ["bruteforce", "bruteforce_range"].includes(hashcatAttack.value)) {
         body.set("wordlist_id", "");
       }
 
@@ -634,7 +686,7 @@
       setStatus("processing", "Enviando arquivo para a API...");
 
       try {
-        const response = await fetch(API.crackPdf, {
+        const response = await fetch(API.crackFile, {
           method: "POST",
           body
         });
@@ -646,8 +698,14 @@
 
         jobId.textContent = data.job_id;
         attackInfo.textContent = engine.value === "hashcat"
-          ? `hashcat ${hashcatAttack.value === "bruteforce" ? `brute force (${hashcatMask.value})` : "wordlist"}`
-          : "john wordlist";
+          ? `${fileType.value} / hashcat ${
+              hashcatAttack.value === "bruteforce"
+                ? `brute force (${hashcatMask.value})`
+                : hashcatAttack.value === "bruteforce_range"
+                  ? `numérico (${hashcatMinLength.value}-${hashcatMaxLength.value})`
+                  : "wordlist"
+            }`
+          : `${fileType.value} / john wordlist`;
         setStatus(data.status, "Job criado. Consultando status...");
         submitButton.textContent = "Processando...";
         pollTimer = setInterval(() => pollStatus(data.job_id), 2500);
@@ -662,6 +720,7 @@
     });
 
     checkApi();
+    syncFileTypeControls();
     syncHashcatControls();
   </script>
 </body>

@@ -3,7 +3,7 @@ import asyncio
 import os
 from typing import Dict
 
-from app.config import JOHN_PATH, HASHCAT_PATH, WORDLISTS
+from app.config import JOHN_PATH, HASHCAT_PATH, WORDLISTS, SUPPORTED_FORMATS
 
 # In-memory store for job statuses.
 # For production, a more persistent store like Redis or a DB would be used.
@@ -59,7 +59,7 @@ async def _run_john(job_id: str, hash_path: str, wordlist_path: str):
         if ":" not in line:
             continue
 
-        password = line.split(":", 1)[1].split(" ")[0].strip()
+        password = line.split(":")[1].strip()
         if password:
             jobs[job_id]["status"] = "cracked"
             jobs[job_id]["result"] = password
@@ -76,6 +76,10 @@ async def _run_hashcat(
     wordlist_path: str | None = None,
     attack_mode: str = "wordlist",
     mask: str | None = None,
+    file_type: str | None = None,
+    charset: str = "?d",
+    min_length: int | None = None,
+    max_length: int | None = None,
 ):
     """Executes Hashcat and attempts to find the password."""
     jobs[job_id]["status"] = "cracking_gpu"
@@ -88,60 +92,103 @@ async def _run_hashcat(
         )
         return
 
-    command = [HASHCAT_PATH, "-m", str(hashcat_mode)]
-
-    if attack_mode == "bruteforce":
+    if attack_mode == "bruteforce_range":
+        if not min_length or not max_length:
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["result"] = "Minimum and maximum lengths are required for brute force range mode."
+            return
+        if min_length < 1 or max_length < min_length or max_length > 12:
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["result"] = "Invalid brute force range. Use minimum >= 1, maximum >= minimum, and maximum <= 12."
+            return
+    elif attack_mode == "bruteforce":
         if not mask:
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["result"] = "Hashcat mask is required for brute force mode."
             return
-
-        jobs[job_id]["attack"] = f"hashcat brute force ({mask})"
-        command.extend(["-a", "3", hash_path, mask])
     else:
         if not wordlist_path:
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["result"] = "Wordlist is required for Hashcat wordlist mode."
             return
 
-        jobs[job_id]["attack"] = f"hashcat wordlist ({wordlist_path})"
-        command.extend(["-a", "0", hash_path, wordlist_path])
+    format_config = SUPPORTED_FORMATS.get(file_type or "")
+    fallback_modes = list(format_config.get("hashcat_modes", [])) if format_config else []
+    modes_to_try = [hashcat_mode] + [mode for mode in fallback_modes if mode != hashcat_mode]
 
-    command.extend(["--potfile-disable", "--quiet", "--hwmon-disable"])
+    no_hash_modes: list[int] = []
 
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await process.communicate()
+    masks_to_try = [mask]
+    if attack_mode == "bruteforce_range":
+        masks_to_try = [charset * length for length in range(min_length or 1, (max_length or 1) + 1)]
 
-    # Hashcat return codes:
-    # 0: Password found
-    # 1: Password not found
-    # -1/255: Error
-    if process.returncode == 0:
-        # On success, Hashcat outputs the hash:password.
-        # Since we are using --quiet, it should only be the result line.
-        output = stdout.decode().strip()
-        if ":" in output:
-            password = output.split(":")[-1]
-            jobs[job_id]["status"] = "cracked"
-            jobs[job_id]["result"] = password
+    for mode in modes_to_try:
+        mode_loaded_hash = False
+        for current_mask in masks_to_try:
+            command = [HASHCAT_PATH, "-m", str(mode)]
+
+            if attack_mode in ["bruteforce", "bruteforce_range"]:
+                if attack_mode == "bruteforce_range":
+                    jobs[job_id]["attack"] = (
+                        f"hashcat brute force range ({charset}, {min_length}-{max_length}) "
+                        f"testing length {len(current_mask or '') // len(charset)} mode {mode}"
+                    )
+                else:
+                    jobs[job_id]["attack"] = f"hashcat brute force ({current_mask}) mode {mode}"
+                command.extend(["-a", "3", hash_path, current_mask or ""])
+            else:
+                jobs[job_id]["attack"] = f"hashcat wordlist ({wordlist_path}) mode {mode}"
+                command.extend(["-a", "0", hash_path, wordlist_path])
+
+            command.extend(["--potfile-disable", "--quiet", "--hwmon-disable"])
+
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            output_text = stderr.decode().strip() or stdout.decode().strip()
+
+            if process.returncode == 0:
+                output = stdout.decode().strip()
+                if ":" in output:
+                    password = output.split(":")[-1]
+                    jobs[job_id]["status"] = "cracked"
+                    jobs[job_id]["result"] = password
+                    return
+
+            if process.returncode == 1:
+                mode_loaded_hash = True
+                continue
+
+            if "No hashes loaded" in output_text or "Signature unmatched" in output_text:
+                no_hash_modes.append(mode)
+                break
+
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["result"] = f"Hashcat failed (Exit Code {process.returncode}) using mode {mode}. Output: {output_text}"
             return
 
-    if process.returncode == 1:
-        jobs[job_id]["status"] = "not_cracked"
-        if attack_mode == "bruteforce":
-            jobs[job_id]["result"] = f"Password not found with brute force mask '{mask}'."
-        else:
-            jobs[job_id]["result"] = "Password not found in the provided wordlist."
-        return
+        if mode_loaded_hash:
+            jobs[job_id]["status"] = "not_cracked"
+            if attack_mode == "bruteforce_range":
+                jobs[job_id]["result"] = (
+                    f"Password not found with brute force range '{charset}' from "
+                    f"{min_length} to {max_length} using Hashcat mode {mode}."
+                )
+            elif attack_mode == "bruteforce":
+                jobs[job_id]["result"] = f"Password not found with brute force mask '{mask}' using Hashcat mode {mode}."
+            else:
+                jobs[job_id]["result"] = f"Password not found in the provided wordlist using Hashcat mode {mode}."
+            return
 
-    # Failure
-    error_output = stderr.decode().strip() or stdout.decode().strip()
     jobs[job_id]["status"] = "failed"
-    jobs[job_id]["result"] = f"Hashcat failed (Exit Code {process.returncode}). Output: {error_output}"
+    jobs[job_id]["result"] = (
+        "Hashcat could not load the hash with the tested modes: "
+        f"{', '.join(str(mode) for mode in no_hash_modes)}. "
+        "The file may use a different encryption variant; try John or identify the correct Hashcat mode manually."
+    )
 
 
 async def start_cracking_task(
@@ -152,6 +199,10 @@ async def start_cracking_task(
     hashcat_mode: int | None,
     hashcat_attack: str = "wordlist",
     hashcat_mask: str | None = None,
+    file_type: str | None = None,
+    hashcat_charset: str = "?d",
+    hashcat_min_length: int | None = None,
+    hashcat_max_length: int | None = None,
 ):
     """
     The main background task that orchestrates the cracking process and final cleanup.
@@ -171,7 +222,7 @@ async def start_cracking_task(
                  jobs[job_id]["result"] = "Hashcat mode is required."
             else:
                 wordlist_path = None
-                if hashcat_attack != "bruteforce":
+                if hashcat_attack not in ["bruteforce", "bruteforce_range"]:
                     wordlist_path = WORDLISTS.get(wordlist_id)
                     if not wordlist_path or not os.path.exists(wordlist_path):
                         jobs[job_id]["status"] = "failed"
@@ -185,6 +236,10 @@ async def start_cracking_task(
                     wordlist_path=wordlist_path,
                     attack_mode=hashcat_attack,
                     mask=hashcat_mask,
+                    file_type=file_type,
+                    charset=hashcat_charset,
+                    min_length=hashcat_min_length,
+                    max_length=hashcat_max_length,
                 )
         else:
             jobs[job_id]["status"] = "failed"

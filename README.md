@@ -1,6 +1,6 @@
-# PDF Cracker
+# Document Password Audit
 
-Aplicação web local para extrair hashes de PDFs protegidos por senha e tentar recuperar a senha usando John the Ripper ou Hashcat.
+Aplicação web local para extrair hashes de arquivos protegidos por senha e tentar recuperar a senha usando John the Ripper ou Hashcat.
 
 ## Visão Geral
 
@@ -8,21 +8,25 @@ O projeto possui:
 
 - Backend em FastAPI.
 - Frontend estático servido pelo próprio backend em `/ui/`.
-- Extração de hash com `pdf2john.pl`.
+- Extração de hash com ferramentas `*2john`.
 - Quebra com John the Ripper via wordlist.
-- Quebra com Hashcat via wordlist ou brute force com máscara.
+- Quebra com Hashcat via wordlist, brute force com máscara ou brute force numérico por intervalo.
+- Suporte inicial a PDF e ZIP.
 
 Fluxos suportados:
 
 ```text
 John:
-PDF -> pdf2john.pl -> john --wordlist
+arquivo -> *2john -> john --wordlist
 
 Hashcat wordlist:
-PDF -> pdf2john.pl -> hashcat -a 0
+arquivo -> *2john -> hashcat -a 0
 
 Hashcat brute force:
-PDF -> pdf2john.pl -> hashcat -a 3
+arquivo -> *2john -> hashcat -a 3
+
+Hashcat brute force numérico por intervalo:
+arquivo -> *2john -> hashcat -a 3 com máscaras ?d de min até max
 ```
 
 ## Requisitos
@@ -32,7 +36,7 @@ Ambiente recomendado:
 - Ubuntu/Debian ou derivado Linux.
 - Python 3.12 ou superior.
 - Perl.
-- John the Ripper Jumbo.
+- John the Ripper Jumbo, incluindo `pdf2john.pl` e `zip2john`.
 - Hashcat, opcional para GPU/CPU.
 - Wordlist `rockyou.txt`, opcional para ataques por wordlist.
 
@@ -81,6 +85,7 @@ O backend procura primeiro por uma instalação local em:
 ```text
 tools/john/run/john
 tools/john/run/pdf2john.pl
+tools/john/run/zip2john
 ```
 
 Para instalar do zero:
@@ -103,6 +108,12 @@ perl tools/john/run/pdf2john.pl --help
 ```
 
 O teste do formato PDF deve terminar com `PASS`.
+
+Valide o extrator ZIP:
+
+```bash
+tools/john/run/zip2john
+```
 
 ## Instalar Wordlist
 
@@ -158,7 +169,8 @@ API:
 
 ```text
 GET  /
-POST /api/v1/crack/pdf
+POST /api/v1/crack/file
+POST /api/v1/crack/pdf        endpoint legado para PDF
 GET  /api/v1/crack/status/{job_id}
 ```
 
@@ -177,6 +189,7 @@ Use quando quiser testar senhas de uma wordlist.
 No frontend:
 
 ```text
+Formato: PDF ou ZIP
 Engine: John the Ripper
 Wordlist: rockyou ou john-default
 ```
@@ -194,6 +207,7 @@ Use quando quiser que o Hashcat teste uma wordlist.
 No frontend:
 
 ```text
+Formato: PDF ou ZIP
 Engine: Hashcat
 Modo Hashcat: 10500
 Ataque: Wordlist
@@ -213,6 +227,7 @@ Use quando quiser testar uma máscara, sem wordlist.
 No frontend:
 
 ```text
+Formato: PDF ou ZIP
 Engine: Hashcat
 Modo Hashcat: 10500
 Ataque: Brute force
@@ -224,6 +239,32 @@ Comando equivalente:
 ```bash
 hashcat -m 10500 -a 3 hash.txt '?d?d?d?d?d?d'
 ```
+
+### Hashcat com Intervalo Numérico
+
+Use quando você sabe que a senha é numérica, mas não sabe a quantidade de dígitos.
+
+No frontend:
+
+```text
+Formato: PDF ou ZIP
+Engine: Hashcat
+Ataque: Numérico por intervalo
+Mínimo: 4
+Máximo: 8
+```
+
+O backend testa automaticamente:
+
+```text
+?d?d?d?d
+?d?d?d?d?d
+?d?d?d?d?d?d
+?d?d?d?d?d?d?d
+?d?d?d?d?d?d?d?d
+```
+
+O limite atual é máximo `12` para evitar jobs grandes demais por acidente.
 
 Máscaras úteis:
 
@@ -260,6 +301,25 @@ Para listar os modos suportados:
 hashcat --help | grep -i PDF
 ```
 
+## Modos Hashcat para ZIP
+
+ZIP pode exigir modos diferentes conforme o tipo do arquivo. Os mais comuns são:
+
+```text
+17200  PKZIP (Compressed)
+17210  PKZIP (Uncompressed)
+17225  PKZIP (Mixed Multi-File)
+13600  WinZip
+```
+
+O padrão configurado para ZIP é `17210`. O backend tenta automaticamente outros modos conhecidos do formato quando o Hashcat retorna `No hashes loaded`.
+
+Se ainda falhar, identifique o modo correto manualmente:
+
+```bash
+hashcat --identify hash.txt
+```
+
 ## Configuração por Variáveis de Ambiente
 
 Os caminhos padrão ficam em `backend/app/config.py`.
@@ -268,6 +328,7 @@ Os caminhos padrão ficam em `backend/app/config.py`.
 
 ```bash
 export PDF2JOHN_PATH=/caminho/para/pdf2john.pl
+export ZIP2JOHN_PATH=/caminho/para/zip2john
 export JOHN_PATH=/caminho/para/john
 export HASHCAT_PATH=/caminho/para/hashcat
 export WORDLIST_ROCKYOU=/caminho/para/rockyou.txt
@@ -287,18 +348,42 @@ curl http://127.0.0.1:8000/
 Resposta esperada:
 
 ```json
-{"message":"PDF Cracker API is running."}
+{"message":"Document Password Audit API is running.","supported_formats":["pdf","zip"]}
 ```
 
 Teste com Hashcat brute force:
 
 ```bash
 curl -s -F engine=hashcat \
+  -F file_type=pdf \
   -F hashcat_mode=10500 \
   -F hashcat_attack=bruteforce \
   -F hashcat_mask='?d?d?d?d?d?d' \
   -F file=@/caminho/para/arquivo.pdf \
-  http://127.0.0.1:8000/api/v1/crack/pdf
+  http://127.0.0.1:8000/api/v1/crack/file
+```
+
+Teste com Hashcat numérico por intervalo:
+
+```bash
+curl -s -F engine=hashcat \
+  -F file_type=zip \
+  -F hashcat_attack=bruteforce_range \
+  -F hashcat_charset='?d' \
+  -F hashcat_min_length=4 \
+  -F hashcat_max_length=8 \
+  -F file=@/caminho/para/arquivo.zip \
+  http://127.0.0.1:8000/api/v1/crack/file
+```
+
+Teste com ZIP e John:
+
+```bash
+curl -s -F file_type=zip \
+  -F engine=john \
+  -F wordlist_id=rockyou \
+  -F file=@/caminho/para/arquivo.zip \
+  http://127.0.0.1:8000/api/v1/crack/file
 ```
 
 A resposta retorna um `job_id`. Consulte:
@@ -309,7 +394,7 @@ curl http://127.0.0.1:8000/api/v1/crack/status/<JOB_ID>
 
 ## Solução de Problemas
 
-### `Could not extract a valid hash from the PDF`
+### `Could not extract a valid hash from the PDF file`
 
 Possíveis causas:
 
@@ -323,9 +408,23 @@ Teste direto:
 perl tools/john/run/pdf2john.pl /caminho/para/arquivo.pdf
 ```
 
+### `Could not extract a valid hash from the ZIP file`
+
+Possíveis causas:
+
+- O ZIP não está protegido por senha.
+- O arquivo não é um ZIP válido.
+- `zip2john` não foi encontrado.
+
+Teste direto:
+
+```bash
+tools/john/run/zip2john /caminho/para/arquivo.zip
+```
+
 ### `No hashes loaded` no Hashcat
 
-Hashcat espera o hash começando com `$pdf$`.
+Hashcat espera o hash começando diretamente no marcador do hash, por exemplo `$pdf$` ou `$pkzip$`.
 
 O backend já remove o prefixo `arquivo.pdf:` automaticamente quando a engine é Hashcat.
 
@@ -339,6 +438,7 @@ E não:
 
 ```text
 arquivo.pdf:$pdf$...
+arquivo.zip/arquivo.txt:$pkzip$...
 ```
 
 ### `Password not found with brute force mask`
@@ -350,6 +450,12 @@ Exemplo: se a senha for `123456`, a máscara precisa cobrir 6 dígitos:
 ```text
 ?d?d?d?d?d?d
 ```
+
+### `Password not found with brute force range`
+
+A senha não está dentro do intervalo numérico testado.
+
+Exemplo: intervalo `4` até `8` só testa senhas compostas apenas por números e com tamanho entre 4 e 8 dígitos.
 
 ### `Password not found in the provided wordlist`
 
@@ -377,7 +483,7 @@ Ctrl + F5
 
 ## Segurança e Uso Autorizado
 
-Use esta ferramenta apenas em arquivos próprios ou em atividades autorizadas pela empresa. PDFs enviados são usados para extrair o hash e o arquivo temporário original é removido após a extração.
+Use esta ferramenta apenas em arquivos próprios ou em atividades autorizadas pela empresa. Arquivos enviados são usados para extrair o hash e o arquivo temporário original é removido após a extração.
 
 ## Estrutura do Projeto
 

@@ -54,8 +54,39 @@ PDF2JOHN_PATH = script_path(
         "/usr/bin/pdf2john",
     ],
 )
+ZIP2JOHN_PATH = executable_path(
+    "ZIP2JOHN_PATH",
+    "zip2john",
+    [
+        str(LOCAL_JOHN_RUN / "zip2john"),
+        "/usr/share/john/zip2john",
+        "/usr/local/bin/zip2john",
+        "/usr/bin/zip2john",
+    ],
+)
 JOHN_PATH = executable_path("JOHN_PATH", "john", [str(LOCAL_JOHN_RUN / "john"), "/usr/bin/john", "/usr/sbin/john"])
 HASHCAT_PATH = executable_path("HASHCAT_PATH", "hashcat", ["/usr/bin/hashcat", "/usr/sbin/hashcat"])
+
+SUPPORTED_FORMATS = {
+    "pdf": {
+        "label": "PDF",
+        "extensions": [".pdf"],
+        "extractor_path": PDF2JOHN_PATH,
+        "extractor_runtime": "perl",
+        "hash_markers": ["$pdf$"],
+        "default_hashcat_mode": 10500,
+        "hashcat_modes": [10500, 10400, 10600, 10700, 25400],
+    },
+    "zip": {
+        "label": "ZIP",
+        "extensions": [".zip"],
+        "extractor_path": ZIP2JOHN_PATH,
+        "extractor_runtime": "native",
+        "hash_markers": ["$pkzip$", "$zip2$"],
+        "default_hashcat_mode": 17210,
+        "hashcat_modes": [17210, 17200, 17225, 13600],
+    },
+}
 
 # --- Wordlist Configuration ---
 # Maps a friendly name to the absolute path of the wordlist file.
@@ -89,6 +120,7 @@ def check_file(name: str, path: str):
         )
 
 check_file("pdf2john", PDF2JOHN_PATH)
+check_executable("zip2john", ZIP2JOHN_PATH)
 check_executable("john", JOHN_PATH)
 check_executable("hashcat", HASHCAT_PATH)
 
