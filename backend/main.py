@@ -34,6 +34,7 @@ async def _create_cracking_job(
     hashcat_charset: str,
     hashcat_min_length: int | None,
     hashcat_max_length: int | None,
+    hashcat_incremental: bool = False,
 ):
     format_config = SUPPORTED_FORMATS.get(file_type)
     if not format_config:
@@ -54,10 +55,6 @@ async def _create_cracking_job(
         allowed = ", ".join(extensions)
         raise HTTPException(status_code=400, detail=f"Invalid file type. Expected: {allowed}.")
 
-    if engine == "hashcat" and hashcat_mode is None:
-        hashcat_mode = format_config.get("default_hashcat_mode")
-    if engine == "hashcat" and hashcat_mode is None:
-        raise HTTPException(status_code=400, detail="Hashcat mode is required when using the 'hashcat' engine.")
     if engine == "hashcat" and hashcat_attack == "bruteforce" and not hashcat_mask:
         raise HTTPException(status_code=400, detail="Hashcat mask is required when using brute force.")
     if engine == "hashcat" and hashcat_attack == "bruteforce_range":
@@ -68,11 +65,12 @@ async def _create_cracking_job(
         if hashcat_min_length < 1 or hashcat_max_length < hashcat_min_length or hashcat_max_length > 12:
             raise HTTPException(status_code=400, detail="Invalid brute force range. Use minimum >= 1, maximum >= minimum, and maximum <= 12.")
 
+    matched_extension = next(extension for extension in extensions if filename.endswith(extension))
     temp_file_path = None
     temp_hash_path = None
 
     try:
-        temp_file_path = save_temporary_file(file, extensions[0])
+        temp_file_path = save_temporary_file(file, matched_extension)
         temp_hash_path = extract_file_hash(temp_file_path, file_type, include_source_name=engine == "john")
     except Exception as e:
         if temp_file_path and os.path.exists(temp_file_path):
@@ -98,6 +96,7 @@ async def _create_cracking_job(
         hashcat_charset,
         hashcat_min_length,
         hashcat_max_length,
+        hashcat_incremental,
     )
 
     return {
@@ -110,15 +109,16 @@ async def _create_cracking_job(
 async def crack_file(
     background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File(description="File to audit.")],
-    file_type: Annotated[str, Form(description="File type: 'pdf' or 'zip'.")],
+    file_type: Annotated[str, Form(description="File type: 'pdf', 'zip', or 'office'.")],
     engine: Annotated[str, Form(description="Cracking engine: 'john' or 'hashcat'.")],
     wordlist_id: Annotated[str, Form(description="Wordlist to use, e.g., 'rockyou'.")] = "",
-    hashcat_mode: Annotated[int | None, Form(description="Required if engine is 'hashcat'.")] = None,
+    hashcat_mode: Annotated[int | None, Form(description="Optional Hashcat mode. Empty enables automatic mode selection.")] = None,
     hashcat_attack: Annotated[str, Form(description="Hashcat attack: 'wordlist', 'bruteforce', or 'bruteforce_range'.")] = "wordlist",
     hashcat_mask: Annotated[str | None, Form(description="Required for Hashcat brute force, e.g., '?d?d?d?d?d?d'.")] = None,
     hashcat_charset: Annotated[str, Form(description="Charset for Hashcat brute force range. Currently supports '?d'.")] = "?d",
     hashcat_min_length: Annotated[int | None, Form(description="Minimum length for brute force range.")] = None,
     hashcat_max_length: Annotated[int | None, Form(description="Maximum length for brute force range.")] = None,
+    hashcat_incremental: Annotated[bool, Form(description="Enable incremental mode for Hashcat brute force.")] = False,
 ):
     """Accepts a supported file, starts cracking in the background, and returns a job ID."""
     return await _create_cracking_job(
@@ -133,6 +133,7 @@ async def crack_file(
         hashcat_charset,
         hashcat_min_length,
         hashcat_max_length,
+        hashcat_incremental,
     )
 
 @app.post("/api/v1/crack/pdf", status_code=202)
@@ -141,12 +142,13 @@ async def crack_pdf(
     file: Annotated[UploadFile, File(description="PDF file to crack.")],
     engine: Annotated[str, Form(description="Cracking engine: 'john' or 'hashcat'.")],
     wordlist_id: Annotated[str, Form(description="Wordlist to use, e.g., 'rockyou'.")] = "",
-    hashcat_mode: Annotated[int | None, Form(description="Required if engine is 'hashcat'.")] = None,
+    hashcat_mode: Annotated[int | None, Form(description="Optional Hashcat mode. Empty enables automatic mode selection.")] = None,
     hashcat_attack: Annotated[str, Form(description="Hashcat attack: 'wordlist', 'bruteforce', or 'bruteforce_range'.")] = "wordlist",
     hashcat_mask: Annotated[str | None, Form(description="Required for Hashcat brute force, e.g., '?d?d?d?d?d?d'.")] = None,
     hashcat_charset: Annotated[str, Form(description="Charset for Hashcat brute force range. Currently supports '?d'.")] = "?d",
     hashcat_min_length: Annotated[int | None, Form(description="Minimum length for brute force range.")] = None,
     hashcat_max_length: Annotated[int | None, Form(description="Maximum length for brute force range.")] = None,
+    hashcat_incremental: Annotated[bool, Form(description="Enable incremental mode for Hashcat brute force.")] = False,
 ):
     """Backward-compatible PDF endpoint."""
     return await _create_cracking_job(
@@ -161,6 +163,7 @@ async def crack_pdf(
         hashcat_charset,
         hashcat_min_length,
         hashcat_max_length,
+        hashcat_incremental,
     )
 
 @app.get("/api/v1/crack/status/{job_id}")

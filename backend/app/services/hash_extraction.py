@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import tempfile
 from fastapi import HTTPException
 from app.config import SUPPORTED_FORMATS
@@ -10,7 +11,7 @@ def _extractor_command(format_config: dict, file_path: str) -> list[str]:
     if format_config.get("extractor_runtime") == "perl":
         return ["perl", extractor_path, file_path]
     if format_config.get("extractor_runtime") == "python":
-        return ["python3", extractor_path, file_path]
+        return [sys.executable, extractor_path, file_path]
     return [extractor_path, file_path]
 
 

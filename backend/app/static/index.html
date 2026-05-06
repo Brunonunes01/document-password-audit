@@ -377,6 +377,7 @@ input[type="text"] {
                 <select id="fileType" name="file_type">
                   <option value="pdf" data-accept="application/pdf,.pdf" data-hashcat-mode="10500">PDF</option>
                   <option value="zip" data-accept=".zip,application/zip,application/x-zip-compressed" data-hashcat-mode="17210">ZIP</option>
+                  <option value="office" data-accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx" data-hashcat-mode="9600">Office</option>
                 </select>
               </div>
               <div>
@@ -401,7 +402,7 @@ input[type="text"] {
             <div class="grid hidden" id="hashcatOptions">
               <div>
                 <label for="hashcatMode">Modo Hashcat</label>
-                <input id="hashcatMode" name="hashcat_mode" type="number" min="0" value="10500" placeholder="Ex.: 10500">
+                <input id="hashcatMode" name="hashcat_mode" type="number" min="0" value="" placeholder="Vazio = Automático">
               </div>
               <div>
                 <label for="hashcatAttack">Ataque</label>
@@ -417,6 +418,15 @@ input[type="text"] {
               <div>
                 <label for="hashcatMask">Máscara</label>
                 <input id="hashcatMask" name="hashcat_mask" type="text" value="?d?d?d?d?d?d" placeholder="?d?d?d?d?d?d">
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 4px; padding-top: 15px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <input id="hashcatIncremental" name="hashcat_incremental" type="checkbox" value="true" style="width: auto; min-height: auto;">
+                  <label for="hashcatIncremental" style="margin-bottom: 0;">Aumentar automaticamente (incremental)</label>
+                </div>
+                <small style="color: var(--muted); font-size: 0.75rem; margin-left: 24px;">
+                  Testa desde 1 dígito até o <strong>tamanho máximo</strong> da máscara acima.
+                </small>
               </div>
             </div>
 
@@ -554,7 +564,8 @@ input[type="text"] {
     function syncFileTypeControls() {
       const selected = fileType.selectedOptions[0];
       fileInput.accept = selected.dataset.accept;
-      hashcatMode.value = selected.dataset.hashcatMode;
+      // We no longer force a mode value, allowing the backend to detect it automatically.
+      hashcatMode.placeholder = `Automático (ex: ${selected.dataset.hashcatMode})`;
       fileName.textContent = fileInput.files[0]?.name || "";
     }
 
@@ -656,6 +667,11 @@ input[type="text"] {
       }
 
       const body = new FormData(form);
+      
+      if (engine.value === "hashcat" && body.get("hashcat_mode") === "") {
+        body.delete("hashcat_mode");
+      }
+
       if (engine.value !== "hashcat") {
         body.delete("hashcat_mode");
         body.delete("hashcat_attack");
@@ -663,10 +679,19 @@ input[type="text"] {
         body.delete("hashcat_charset");
         body.delete("hashcat_min_length");
         body.delete("hashcat_max_length");
+        body.delete("hashcat_incremental");
       }
 
       if (engine.value === "hashcat" && hashcatAttack.value !== "bruteforce") {
         body.delete("hashcat_mask");
+        body.delete("hashcat_incremental");
+      }
+
+      if (engine.value === "hashcat" && hashcatAttack.value === "bruteforce") {
+        // FormData doesn't include unchecked checkboxes. FastAPI expects bool.
+        if (!document.querySelector("#hashcatIncremental").checked) {
+          body.set("hashcat_incremental", "false");
+        }
       }
 
       if (engine.value === "hashcat" && hashcatAttack.value !== "bruteforce_range") {

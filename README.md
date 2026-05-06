@@ -11,7 +11,7 @@ O projeto possui:
 - Extração de hash com ferramentas `*2john`.
 - Quebra com John the Ripper via wordlist.
 - Quebra com Hashcat via wordlist, brute force com máscara ou brute force numérico por intervalo.
-- Suporte inicial a PDF e ZIP.
+- Suporte inicial a PDF, ZIP e pacotes Microsoft Office.
 
 Fluxos suportados:
 
@@ -23,7 +23,7 @@ Hashcat wordlist:
 arquivo -> *2john -> hashcat -a 0
 
 Hashcat brute force:
-arquivo -> *2john -> hashcat -a 3
+arquivo -> *2john -> hashcat -a 3 (com opção --increment)
 
 Hashcat brute force numérico por intervalo:
 arquivo -> *2john -> hashcat -a 3 com máscaras ?d de min até max
@@ -36,7 +36,7 @@ Ambiente recomendado:
 - Ubuntu/Debian ou derivado Linux.
 - Python 3.12 ou superior.
 - Perl.
-- John the Ripper Jumbo, incluindo `pdf2john.pl` e `zip2john`.
+- John the Ripper Jumbo, incluindo `pdf2john.pl`, `zip2john` e `office2john.py`.
 - Hashcat, opcional para GPU/CPU.
 - Wordlist `rockyou.txt`, opcional para ataques por wordlist.
 
@@ -86,6 +86,7 @@ O backend procura primeiro por uma instalação local em:
 tools/john/run/john
 tools/john/run/pdf2john.pl
 tools/john/run/zip2john
+tools/john/run/office2john.py
 ```
 
 Para instalar do zero:
@@ -113,6 +114,12 @@ Valide o extrator ZIP:
 
 ```bash
 tools/john/run/zip2john
+```
+
+Valide o extrator Office:
+
+```bash
+python3 tools/john/run/office2john.py
 ```
 
 ## Instalar Wordlist
@@ -189,7 +196,7 @@ Use quando quiser testar senhas de uma wordlist.
 No frontend:
 
 ```text
-Formato: PDF ou ZIP
+Formato: PDF, ZIP ou Office
 Engine: John the Ripper
 Wordlist: rockyou ou john-default
 ```
@@ -207,9 +214,9 @@ Use quando quiser que o Hashcat teste uma wordlist.
 No frontend:
 
 ```text
-Formato: PDF ou ZIP
+Formato: PDF, ZIP ou Office
 Engine: Hashcat
-Modo Hashcat: 10500
+Modo Hashcat: vazio para automático, ou informe manualmente
 Ataque: Wordlist
 Wordlist: rockyou
 ```
@@ -227,17 +234,20 @@ Use quando quiser testar uma máscara, sem wordlist.
 No frontend:
 
 ```text
-Formato: PDF ou ZIP
+Formato: PDF, ZIP ou Office
 Engine: Hashcat
-Modo Hashcat: 10500
+Modo Hashcat: vazio para automático, ou informe manualmente
 Ataque: Brute force
-Máscara: ?d?d?d?d?d?d
+Máscara: ?d?d?d?d?d?d?d?d?d?d (Recomendado: 10 a 12 dígitos para números)
+Opção: Aumentar automaticamente (incremental)
 ```
+
+> **IMPORTANTE:** No modo **Incremental**, a máscara informada define o tamanho **MÁXIMO** do teste. Por exemplo, se você informar 6 dígitos (`?d?d?d?d?d?d`) com a opção incremental, o Hashcat testará senhas de 1 até 6 dígitos. Se a senha tiver 7 ou mais, ela **não** será encontrada. Para uma busca automática completa, use uma máscara longa (ex: 10 ou 12 dígitos).
 
 Comando equivalente:
 
 ```bash
-hashcat -m 10500 -a 3 hash.txt '?d?d?d?d?d?d'
+hashcat -m 10500 -a 3 hash.txt '?d?d?d?d?d?d' --increment
 ```
 
 ### Hashcat com Intervalo Numérico
@@ -247,7 +257,7 @@ Use quando você sabe que a senha é numérica, mas não sabe a quantidade de d�
 No frontend:
 
 ```text
-Formato: PDF ou ZIP
+Formato: PDF, ZIP ou Office
 Engine: Hashcat
 Ataque: Numérico por intervalo
 Mínimo: 4
@@ -312,13 +322,27 @@ ZIP pode exigir modos diferentes conforme o tipo do arquivo. Os mais comuns são
 13600  WinZip
 ```
 
-O padrão configurado para ZIP é `17210`. O backend tenta automaticamente outros modos conhecidos do formato quando o Hashcat retorna `No hashes loaded`.
+Quando o modo Hashcat fica vazio, o backend tenta identificar o modo pelo hash e usa `17210` como primeiro fallback para ZIP.
 
 Se ainda falhar, identifique o modo correto manualmente:
 
 ```bash
 hashcat --identify hash.txt
 ```
+
+## Modos Hashcat para Office
+
+Os modos mais comuns para Microsoft Office são:
+
+```text
+9400   MS Office 2007
+9500   MS Office 2010
+9600   MS Office 2013
+9700   MS Office <= 2003 $0/$1, MD5 + RC4
+9800   MS Office <= 2003 $3/$4, SHA1 + RC4
+```
+
+Quando o modo Hashcat fica vazio, o backend tenta identificar o modo pelo hash e usa `9600` como primeiro fallback para Office.
 
 ## Configuração por Variáveis de Ambiente
 
@@ -329,6 +353,7 @@ Os caminhos padrão ficam em `backend/app/config.py`.
 ```bash
 export PDF2JOHN_PATH=/caminho/para/pdf2john.pl
 export ZIP2JOHN_PATH=/caminho/para/zip2john
+export OFFICE2JOHN_PATH=/caminho/para/office2john.py
 export JOHN_PATH=/caminho/para/john
 export HASHCAT_PATH=/caminho/para/hashcat
 export WORDLIST_ROCKYOU=/caminho/para/rockyou.txt
@@ -348,17 +373,17 @@ curl http://127.0.0.1:8000/
 Resposta esperada:
 
 ```json
-{"message":"Document Password Audit API is running.","supported_formats":["pdf","zip"]}
+{"message":"Document Password Audit API is running.","supported_formats":["pdf","zip","office"]}
 ```
 
-Teste com Hashcat brute force:
+Teste com Hashcat brute force incremental:
 
 ```bash
 curl -s -F engine=hashcat \
   -F file_type=pdf \
-  -F hashcat_mode=10500 \
   -F hashcat_attack=bruteforce \
   -F hashcat_mask='?d?d?d?d?d?d' \
+  -F hashcat_incremental=true \
   -F file=@/caminho/para/arquivo.pdf \
   http://127.0.0.1:8000/api/v1/crack/file
 ```
@@ -383,6 +408,16 @@ curl -s -F file_type=zip \
   -F engine=john \
   -F wordlist_id=rockyou \
   -F file=@/caminho/para/arquivo.zip \
+  http://127.0.0.1:8000/api/v1/crack/file
+```
+
+Teste com Office e John:
+
+```bash
+curl -s -F file_type=office \
+  -F engine=john \
+  -F wordlist_id=rockyou \
+  -F file=@/caminho/para/arquivo.docx \
   http://127.0.0.1:8000/api/v1/crack/file
 ```
 
@@ -420,6 +455,21 @@ Teste direto:
 
 ```bash
 tools/john/run/zip2john /caminho/para/arquivo.zip
+```
+
+### `Could not extract a valid hash from the OFFICE file`
+
+Possíveis causas:
+
+- O arquivo Office não está protegido por senha de abertura.
+- O arquivo usa apenas proteção de edição/planilha, que é diferente de criptografia de abertura.
+- O arquivo não é um pacote Office válido.
+- `office2john.py` não foi encontrado.
+
+Teste direto:
+
+```bash
+python3 tools/john/run/office2john.py /caminho/para/arquivo.docx
 ```
 
 ### `No hashes loaded` no Hashcat

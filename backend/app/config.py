@@ -64,6 +64,15 @@ ZIP2JOHN_PATH = executable_path(
         "/usr/bin/zip2john",
     ],
 )
+OFFICE2JOHN_PATH = script_path(
+    "OFFICE2JOHN_PATH",
+    [
+        str(LOCAL_JOHN_RUN / "office2john.py"),
+        "/usr/share/john/office2john.py",
+        "/usr/local/bin/office2john.py",
+        "/usr/bin/office2john.py",
+    ],
+)
 JOHN_PATH = executable_path("JOHN_PATH", "john", [str(LOCAL_JOHN_RUN / "john"), "/usr/bin/john", "/usr/sbin/john"])
 HASHCAT_PATH = executable_path("HASHCAT_PATH", "hashcat", ["/usr/bin/hashcat", "/usr/sbin/hashcat"])
 
@@ -85,6 +94,15 @@ SUPPORTED_FORMATS = {
         "hash_markers": ["$pkzip$", "$zip2$"],
         "default_hashcat_mode": 17210,
         "hashcat_modes": [17210, 17200, 17225, 13600],
+    },
+    "office": {
+        "label": "Office",
+        "extensions": [".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"],
+        "extractor_path": OFFICE2JOHN_PATH,
+        "extractor_runtime": "python",
+        "hash_markers": ["$office$"],
+        "default_hashcat_mode": 9600,
+        "hashcat_modes": [9600, 9500, 9400, 9700, 9800, 9710, 9720, 9810, 9820],
     },
 }
 
@@ -121,6 +139,7 @@ def check_file(name: str, path: str):
 
 check_file("pdf2john", PDF2JOHN_PATH)
 check_executable("zip2john", ZIP2JOHN_PATH)
+check_file("office2john", OFFICE2JOHN_PATH)
 check_executable("john", JOHN_PATH)
 check_executable("hashcat", HASHCAT_PATH)
 
